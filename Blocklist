@@ -1,0 +1,4 @@
+# One domain per line (hosts-file format like "0.0.0.0 domain" also works)
+doubleclick.net
+googleadservices.com
+ads.example.com
