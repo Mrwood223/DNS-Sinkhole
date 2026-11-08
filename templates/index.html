@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNS Sinkhole Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1c2330; --muted: #667085;
+    --border: #e3e6eb; --blue: #2f6fed; --red: #e5484d; --green: #2f9e6b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e8ebf0; --muted: #98a2b3;
+      --border: #2a313d; --blue: #5b93ff; --red: #ff6b70; --green: #4cc38a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; justify-content: space-between; align-items: center;
+           flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0; }
+  select { background: var(--card); color: var(--text); border: 1px solid var(--border);
+           border-radius: 8px; padding: 6px 10px; font: inherit; }
+  .grid { display: grid; gap: 14px; }
+  .stats { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 14px; }
+  .two { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-bottom: 14px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .card h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 8px;
+             text-transform: uppercase; letter-spacing: .04em; }
+  .big { font-size: 28px; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .chart-box { position: relative; height: 240px; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 8px 6px 0; }
+  td { padding: 5px 8px 5px 0; border-top: 1px solid var(--border); word-break: break-all; }
+  .BLOCKED { color: var(--red); font-weight: 600; }
+  .CACHED { color: var(--blue); }
+  .ALLOWED { color: var(--green); }
+  .ERROR { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>DNS Sinkhole</h1>
+  <label>Time range
+    <select id="range">
+      <option value="1">Last hour</option>
+      <option value="6">Last 6 hours</option>
+      <option value="24" selected>Last 24 hours</option>
+      <option value="168">Last 7 days</option>
+      <option value="720">Last 30 days</option>
+    </select>
+  </label>
+</header>
+
+<section class="grid stats">
+  <div class="card"><h2>Total queries</h2><div class="big" id="s-total">–</div><div class="sub" id="s-clients">&nbsp;</div></div>
+  <div class="card"><h2>Blocked</h2><div class="big" id="s-blocked">–</div><div class="sub" id="s-pct">&nbsp;</div></div>
+  <div class="card"><h2>Cache hits</h2><div class="big" id="s-cached">–</div><div class="sub" id="s-cached-ms">&nbsp;</div></div>
+  <div class="card"><h2>Forwarded</h2><div class="big" id="s-allowed">–</div><div class="sub" id="s-fwd-ms">&nbsp;</div></div>
+</section>
+
+<section class="card" style="margin-bottom:14px">
+  <h2>Queries over time</h2>
+  <div class="chart-box"><canvas id="timeline"></canvas></div>
+</section>
+
+<section class="grid two">
+  <div class="card"><h2>Top blocked domains</h2><div class="chart-box"><canvas id="top"></canvas></div></div>
+  <div class="card"><h2>Clients</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Client</th><th>Queries</th><th>Blocked</th></tr></thead>
+      <tbody id="clients"></tbody>
+    </table></div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Recent queries</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Time</th><th>Client</th><th>Domain</th><th>Type</th><th>Action</th><th>ms</th></tr></thead>
+    <tbody id="recent"></tbody>
+  </table></div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmt = n => Number(n).toLocaleString();
+const ms = v => (v == null ? "n/a" : v.toFixed(1) + " ms");
+
+async function api(path, params = {}) {
+  const qs = new URLSearchParams({ hours: $("range").value, ...params });
+  const res = await fetch(`/api/${path}?${qs}`);
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.json();
+}
+
+// Domains come from the network, so always insert them as text, never as HTML.
+function fillTable(id, rows, classCol) {
+  const body = $(id);
+  body.replaceChildren();
+  for (const cells of rows) {
+    const tr = document.createElement("tr");
+    cells.forEach((value, i) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (i === classCol) td.className = value;
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  }
+}
+
+let timelineChart, topChart;
+
+function makeCharts() {
+  Chart.defaults.color = css("--muted");
+  Chart.defaults.borderColor = css("--border");
+  timelineChart = new Chart($("timeline"), {
+    type: "line",
+    data: { datasets: [
+      { label: "All queries", borderColor: css("--blue"), backgroundColor: css("--blue"), tension: 0.25, pointRadius: 0 },
+      { label: "Blocked", borderColor: css("--red"), backgroundColor: css("--red"), tension: 0.25, pointRadius: 0 },
+    ]},
+    options: {
+      maintainAspectRatio: false,
+      scales: { x: { type: "category" }, y: { beginAtZero: true } },
+      plugins: { legend: { position: "bottom" } },
+    },
+  });
+  topChart = new Chart($("top"), {
+    type: "bar",
+    data: { labels: [], datasets: [{ label: "Blocked", data: [], backgroundColor: css("--red") }] },
+    options: {
+      indexAxis: "y",
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { beginAtZero: true } },
+    },
+  });
+}
+
+async function refresh() {
+  try {
+    const [s, tl, top, clients, recent] = await Promise.all([
+      api("summary"), api("timeline"), api("top-blocked"), api("clients"), api("recent", { limit: 25 }),
+    ]);
+
+    $("s-total").textContent = fmt(s.total);
+    $("s-clients").textContent = `${fmt(s.clients)} client${s.clients === 1 ? "" : "s"}`;
+    $("s-blocked").textContent = fmt(s.blocked);
+    $("s-pct").textContent = `${s.block_pct}% of queries`;
+    $("s-cached").textContent = fmt(s.cached);
+    $("s-cached-ms").textContent = `avg ${ms(s.avg_cached_ms)}`;
+    $("s-allowed").textContent = fmt(s.allowed);
+    $("s-fwd-ms").textContent = `avg ${ms(s.avg_forward_ms)}`;
+
+    const long = $("range").value > 6;
+    timelineChart.data.labels = tl.map(p => {
+      const d = new Date(p.t);
+      return long ? d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric" })
+                  : d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    });
+    timelineChart.data.datasets[0].data = tl.map(p => p.total);
+    timelineChart.data.datasets[1].data = tl.map(p => p.blocked);
+    timelineChart.update();
+
+    topChart.data.labels = top.map(r => r.domain);
+    topChart.data.datasets[0].data = top.map(r => r.count);
+    topChart.update();
+
+    fillTable("clients", clients.map(c => [c.client_ip, fmt(c.total), fmt(c.blocked)]));
+    fillTable("recent", recent.map(r => [
+      new Date(r.ts * 1000).toLocaleTimeString(), r.client_ip, r.domain, r.qtype, r.action,
+      r.latency_ms == null ? "" : r.latency_ms.toFixed(1),
+    ]), 4);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+makeCharts();
+refresh();
+setInterval(refresh, 10000);
+$("range").addEventListener("change", refresh);
+</script>
+</body>
+</html>
