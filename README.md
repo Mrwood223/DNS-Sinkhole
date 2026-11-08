@@ -24,6 +24,14 @@ dig @127.0.0.1 -p 5353 doubleclick.net   # should return 0.0.0.0
 dig @127.0.0.1 -p 5353 example.com       # should resolve normally
 ```
 
+After sending some queries, summarize the log:
+
+```bash
+python stats.py
+```
+
+Queries are stored in `queries.db` (SQLite). Pass `--db ''` to disable logging.
+
 To serve on the standard port 53, run as root or grant the capability:
 `sudo setcap 'cap_net_bind_service=+ep' $(readlink -f $(which python3))`
 
@@ -31,8 +39,8 @@ To serve on the standard port 53, run as root or grant the capability:
 
 - [x] Forwarding resolver
 - [x] Blocklist and sinkhole responses
-- [ ] SQLite query logging
-- [ ] Response caching (TTL-aware)
+- [x] SQLite query logging
+- [x] Response caching (TTL-aware)
 - [ ] Web dashboard (top blocked domains, per-device stats)
 - [ ] DNS-over-TLS upstream
 - [ ] Anomaly detection (DNS tunneling, query spikes)
