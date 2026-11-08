@@ -32,6 +32,19 @@ python stats.py
 
 Queries are stored in `queries.db` (SQLite). Pass `--db ''` to disable logging.
 
+## Dashboard
+
+With the sinkhole running (so `queries.db` exists), start the dashboard in a second terminal:
+
+```bash
+python dashboard.py                  # http://127.0.0.1:8080
+python dashboard.py --host 0.0.0.0   # reachable from other devices on your LAN
+```
+
+It shows total/blocked/cached/forwarded counts, queries over time, top blocked domains, per-client activity, and a live feed of recent queries. It refreshes every 10 seconds and opens the database read-only.
+
+There is no authentication, so keep it on your home network and don't expose it to the internet.
+
 To serve on the standard port 53, run as root or grant the capability:
 `sudo setcap 'cap_net_bind_service=+ep' $(readlink -f $(which python3))`
 
@@ -41,7 +54,7 @@ To serve on the standard port 53, run as root or grant the capability:
 - [x] Blocklist and sinkhole responses
 - [x] SQLite query logging
 - [x] Response caching (TTL-aware)
-- [ ] Web dashboard (top blocked domains, per-device stats)
+- [x] Web dashboard (top blocked domains, per-device stats)
 - [ ] DNS-over-TLS upstream
 - [ ] Anomaly detection (DNS tunneling, query spikes)
 - [ ] Docker packaging and systemd service
